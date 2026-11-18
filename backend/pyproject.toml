@@ -1,0 +1,55 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "AditMonro3", email = "adi7ya.t@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "alembic>=1.20.1",
+    "argon2-cffi>=25.1.0",
+    "asyncpg>=0.32.0",
+    "boto3>=1.44.3",
+    "celery>=5.7.0",
+    "fastapi>=0.163.0",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.16.3",
+    "pydantic[email]>=2.14",
+    "pyjwt[crypto]>=2.15.1",
+    "python-multipart>=0.0.20",
+    "redis>=8.1.0",
+    "sqlalchemy[asyncio]>=2.1.8",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "celery-types>=0.26.0",
+    "mypy>=2.4.1",
+    "pre-commit>=4.7.0",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "ruff>=0.17.5",
+    "testcontainers>=4.15.0",
+]
+
+[tool.ruff.lint.isort]
+# backend/alembic/ holds our migrations, so Ruff would guess `alembic` is our own code.
+# It's the installed library: sort it with the other third-party imports.
+known-third-party = ["alembic"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Makes `import app` work in tests when pytest runs from backend/.
+pythonpath = ["."]
+# Run `async def` tests and fixtures without marking each one.
+asyncio_mode = "auto"
+# One event loop for the whole run: the database engine is created once (session
+# fixture) and shared by every test, and asyncpg connections can't move between loops.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"

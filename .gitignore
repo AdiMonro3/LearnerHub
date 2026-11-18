@@ -1,0 +1,12 @@
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+*.db
+
+# Node
+node_modules/
+dist/

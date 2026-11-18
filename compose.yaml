@@ -1,0 +1,112 @@
+# The services the backend needs while you develop. The API itself still runs on your
+# machine (uvicorn), so code reloads instantly.
+#
+#   docker compose up -d --wait   start everything, wait until each one is healthy
+#   docker compose ps             what's running
+#   docker compose logs -f redis  follow one service's logs
+#   docker compose down           stop everything (data is kept)
+#   docker compose down -v        stop everything AND delete the database's data
+#
+# Every port is bound to 127.0.0.1, so only this machine can reach these services,
+# not other devices on your Wi-Fi.
+
+name: learnhub
+
+services:
+  # The database. The same image the tests use, so dev and tests run the same Postgres,
+  # with pgvector ready for the AI phase. Host port 5433, because Homebrew Postgres
+  # already uses 5432.
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: learnhub
+      POSTGRES_PASSWORD: learnhub
+      POSTGRES_DB: learnhub
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U learnhub -d learnhub"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # Fast in-memory storage: rate limits, cached access checks, live-chat fan-out.
+  # Nothing in it has to survive a restart, so it has no volume.
+  redis:
+    image: redis:8.4-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # The job queue. The API puts a job here ("send this email", "convert this video")
+  # and answers the user straight away; the Celery worker picks the job up and does it.
+  # Watch the queues in a browser at http://localhost:15672 (user/password: learnhub).
+  rabbitmq:
+    image: rabbitmq:4.3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: learnhub
+      RABBITMQ_DEFAULT_PASS: learnhub
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  # File storage that speaks the same S3 API as Amazon S3, so the same code works in
+  # production. Videos, thumbnails and course materials will live here (Phase 3).
+  # Browse the files at http://localhost:9001/rustfs/console/
+  # (user: learnhub, password: learnhub-secret).
+  rustfs:
+    image: rustfs/rustfs:1.0.6
+    environment:
+      RUSTFS_ACCESS_KEY: learnhub
+      RUSTFS_SECRET_KEY: learnhub-secret
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - s3-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost:9000/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # A one-off job: makes sure the "learnhub" bucket exists in RustFS, then exits.
+  # Running it again is harmless: it only creates the bucket when it's missing.
+  create-bucket:
+    image: amazon/aws-cli:2.40.4
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: learnhub
+      AWS_SECRET_ACCESS_KEY: learnhub-secret
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://rustfs:9000
+    entrypoint: ["sh", "-c"]
+    command:
+      - aws s3api head-bucket --bucket learnhub 2>/dev/null
+        || aws s3api create-bucket --bucket learnhub
+
+  # A pretend mail server. The app sends email to SMTP port 1025, and nothing leaves
+  # your machine: read every message at http://localhost:8025.
+  mailpit:
+    image: axllent/mailpit:v1.28
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+
+volumes:
+  postgres-data:
+  s3-data:
