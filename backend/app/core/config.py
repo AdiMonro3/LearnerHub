@@ -21,8 +21,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://learnhub:learnhub@localhost:5433/learnhub"
     redis_url: str = "redis://localhost:6379/0"
     rabbitmq_url: str = "amqp://learnhub:learnhub@localhost:5672//"
+    # File storage (S3 API). The defaults point at RustFS from compose.yaml; production
+    # points them at Amazon S3. Phase 3 uploads use these.
     s3_endpoint: str = "http://localhost:9000"
     s3_bucket: str = "learnhub"
+    s3_region: str = "us-east-1"
+    s3_access_key: str = "learnhub"
+    s3_secret_key: SecretStr = SecretStr("learnhub-secret")
 
     # Outgoing email. The defaults point at Mailpit from compose.yaml.
     smtp_host: str = "localhost"

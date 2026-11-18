@@ -5,7 +5,7 @@
 #   docker compose ps             what's running
 #   docker compose logs -f redis  follow one service's logs
 #   docker compose down           stop everything (data is kept)
-#   docker compose down -v        stop everything AND delete the database's data
+#   docker compose down -v        stop everything AND delete all data (database, files)
 #
 # Every port is bound to 127.0.0.1, so only this machine can reach these services,
 # not other devices on your Wi-Fi.
@@ -81,23 +81,17 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
-
-  # A one-off job: makes sure the "learnhub" bucket exists in RustFS, then exits.
-  # Running it again is harmless: it only creates the bucket when it's missing.
-  create-bucket:
-    image: amazon/aws-cli:2.40.4
-    depends_on:
-      rustfs:
-        condition: service_healthy
-    environment:
-      AWS_ACCESS_KEY_ID: learnhub
-      AWS_SECRET_ACCESS_KEY: learnhub-secret
-      AWS_DEFAULT_REGION: us-east-1
-      AWS_ENDPOINT_URL: http://rustfs:9000
-    entrypoint: ["sh", "-c"]
-    command:
-      - aws s3api head-bucket --bucket learnhub 2>/dev/null
-        || aws s3api create-bucket --bucket learnhub
+    # Every time RustFS starts, Compose runs this inside it to create the "learnhub"
+    # bucket: wait until RustFS answers, ask whether the bucket exists (HEAD), and
+    # create it (PUT) only if it doesn't. curl signs the requests with the S3 login.
+    post_start:
+      - command:
+          - sh
+          - -c
+          - |
+            until curl -fs -o /dev/null http://localhost:9000/health; do sleep 1; done
+            curl -fs -o /dev/null -I --aws-sigv4 aws:amz:us-east-1:s3 --user learnhub:learnhub-secret http://localhost:9000/learnhub ||
+            curl -fsS -o /dev/null -X PUT --aws-sigv4 aws:amz:us-east-1:s3 --user learnhub:learnhub-secret http://localhost:9000/learnhub
 
   # A pretend mail server. The app sends email to SMTP port 1025, and nothing leaves
   # your machine: read every message at http://localhost:8025.
@@ -106,6 +100,66 @@ services:
     ports:
       - "127.0.0.1:1025:1025"
       - "127.0.0.1:8025:8025"
+
+  # --- The backend itself, in containers (optional) ----------------------------------
+  # Day to day, run uvicorn and the worker on your machine (code reloads instantly).
+  # These three only start with the "app" profile, e.g. to try the Docker image:
+  #
+  #   docker compose --profile app up -d --wait --build
+  #
+  # Inside Docker, services reach each other by service name (postgres, redis, ...),
+  # not localhost, so these settings override the defaults in config.py.
+
+  # A one-off job: brings the database up to the latest migration, then exits.
+  migrate:
+    profiles: ["app"]
+    build: ./backend
+    image: learnhub-backend
+    command: ["alembic", "upgrade", "head"]
+    environment: &backend-settings # "&" names this block so the others can reuse it
+      DATABASE_URL: postgresql+asyncpg://learnhub:learnhub@postgres:5432/learnhub
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://learnhub:learnhub@rabbitmq:5672//
+      SMTP_HOST: mailpit
+      S3_ENDPOINT: http://rustfs:9000
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    profiles: ["app"]
+    build: ./backend
+    image: learnhub-backend
+    environment: *backend-settings # the same settings as migrate
+    ports:
+      # API_PORT=8001 docker compose ... if your own uvicorn already uses 8000.
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    profiles: ["app"]
+    build: ./backend
+    image: learnhub-backend
+    command: ["celery", "-A", "app.worker", "worker", "--loglevel=info"]
+    environment: *backend-settings
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
 
 volumes:
   postgres-data:

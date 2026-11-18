@@ -1,0 +1,9 @@
+# Docker gets only the files the image needs: ignore everything, then allow these.
+# This keeps secrets (.env), the local .venv, tests and caches out of the image.
+*
+!app/
+!alembic/
+!alembic.ini
+!pyproject.toml
+!uv.lock
+**/__pycache__

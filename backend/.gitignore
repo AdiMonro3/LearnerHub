@@ -1,0 +1,3 @@
+
+# Secrets: settings with passwords and keys stay on this machine
+.env

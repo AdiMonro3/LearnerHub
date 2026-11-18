@@ -1,24 +1,87 @@
-# Auth: Google OAuth 2.0 + email/password
+# LearnerHub
 
-FastAPI backend (`backend/`) + React frontend (`frontend/`).
+A teacher-led learning platform. A teacher runs a channel; the channel has courses, and courses have sections of video or live lessons. Learners subscribe to a channel or a single course.
+
+FastAPI backend in `backend/`, React frontend in `frontend/`.
+
+**Built so far:** accounts and sign-in (password, Google, email links), channels, courses, sections and lessons, search, and the local infrastructure. Video, subscriptions, comments, live classes and notifications come next.
+
+## What you need
+
+- Docker (OrbStack, Docker Desktop or Colima)
+- [uv](https://docs.astral.sh/uv/), which installs Python and the backend's packages
+- Node.js, for the frontend
 
 ## Run it
 
 ```bash
-# Terminal 1 — backend (http://localhost:8000, API docs at /docs)
-cd backend
-../.venv/bin/pip install -r requirements.txt   # first time only
-../.venv/bin/fastapi dev src/main.py
+# 1. Start the services the backend needs (from the repo root)
+docker compose up -d --wait
 
-# Terminal 2 — frontend (http://localhost:5173)
+# 2. The API: http://localhost:8000, interactive docs at http://localhost:8000/docs
+cd backend
+uv sync                        # first time, and after dependencies change
+uv run alembic upgrade head    # first time, and after pulling new migrations
+uv run uvicorn app.main:app --reload
+
+# 3. The background worker (sends emails), in a second terminal
+cd backend
+uv run celery -A app.worker worker --loglevel=info
+
+# 4. The frontend: http://localhost:5173, in a third terminal
 cd frontend
-npm install        # first time only
+npm install                    # first time only
 npm run dev
 ```
 
-Open **http://localhost:5173** (use `localhost`, not `127.0.0.1`, or cookies and CORS won't match).
+Open **http://localhost:5173**. Use `localhost`, not `127.0.0.1`, or cookies and CORS won't match.
 
-Tests: `cd backend && ../.venv/bin/python -m pytest`
+`docker compose down` stops the services and keeps their data. `docker compose down -v` also deletes the data.
+
+## Local services
+
+| Service | Address | What it's for | Login |
+|---|---|---|---|
+| Postgres | `localhost:5433` | The database | `learnhub` / `learnhub` |
+| Redis | `localhost:6379` | Job results; later rate limits and caching | |
+| RabbitMQ | http://localhost:15672 | The job queue between the API and the worker | `learnhub` / `learnhub` |
+| RustFS | http://localhost:9001/rustfs/console/ | File storage with the S3 API (bucket `learnhub`) | `learnhub` / `learnhub-secret` |
+| Mailpit | http://localhost:8025 | Catches every email the app sends; nothing leaves your machine | |
+
+Two health checks:
+- `GET /health` asks "is the API running?"
+- `GET /health/ready` asks "can it reach the database, Redis and RabbitMQ?" It returns 503 and names whatever is down.
+
+## Configuration
+
+Every setting and its default is in [`backend/app/core/config.py`](backend/app/core/config.py). The defaults match `compose.yaml`, so local development needs no configuration.
+
+To change a setting, put it in `backend/.env`, for example `JWT_SECRET=...`. Never commit that file.
+
+## Tests and checks
+
+From `backend/`. Docker must be running, because the tests start their own throwaway Postgres.
+
+```bash
+uv run pytest            # all tests
+uv run ruff check        # lint
+uv run ruff format       # format the code
+uv run mypy app tests    # type checks
+uv run alembic check     # the models and the migrations agree
+```
+
+## Run everything in Docker
+
+```bash
+docker compose --profile app up -d --wait --build
+```
+
+This command also builds the backend image (`backend/Dockerfile`) and runs three things from it:
+1. the database migrations;
+2. the API, on port 8000;
+3. the worker.
+
+Stop your own uvicorn first, or choose another port with `API_PORT=8001 docker compose ...`.
 
 ## Turn on Google sign-in
 
@@ -33,27 +96,16 @@ Tests: `cd backend && ../.venv/bin/python -m pytest`
    ```
 6. Restart the backend. The Google button on the login page becomes active.
 
-## How it works
+## More documentation
 
-| Endpoint | What it does |
-|---|---|
-| `POST /auth/register` | Create account (email, password ≥ 8 chars, optional name) and sign in |
-| `POST /auth/login` | Email + password sign-in |
-| `POST /auth/token` | Standard OAuth 2.0 password grant (form: `username`=email, `password`). Used by the **Authorize** button in `/docs` |
-| `GET /auth/google/login` → `/auth/google/callback` | Google sign-in (Authorization Code flow + PKCE, `state`, `nonce`, signature-checked ID token) |
-| `POST /auth/refresh` | Get a new access token using the refresh cookie |
-| `POST /auth/logout` | End this session |
-| `POST /auth/password` | Change password, or set one on a Google-only account. Signs out other devices |
-| `GET /users/me` | Example protected route (`Authorization: Bearer <token>`) |
-
-- **Access token:** a JWT valid for 15 minutes. The frontend keeps it in memory only.
-- **Refresh token:** random, valid 7 days, stored only as a SHA-256 hash, sent as an `httpOnly` cookie scoped to `/auth`. It **rotates on every use**; replaying an old one revokes that whole login chain (stolen-token detection).
-- **Passwords:** hashed with Argon2.
-- **Same email, both methods:** signing in with Google using the email of an existing password account links them into one account.
+- [`backend/docs/api.md`](backend/docs/api.md): how to use the channels and courses API
+- [`backend/docs/data-model.md`](backend/docs/data-model.md): the database design (ER diagram)
 
 ## Before deploying for real
 
-- Set `COOKIE_SECURE=true`, serve over HTTPS, and update `BACKEND_URL` / `FRONTEND_URL` (and the redirect URI in Google Console).
-- Add email verification for password sign-ups. Without it, someone could register with another person's email first, and that account would later be linked when the real owner uses Google.
-- Add rate limiting on `/auth/login` and `/auth/register`.
-- Use Postgres + Alembic migrations instead of SQLite + `create_all`.
+- **Secrets:** set `ENV=production` and a random `JWT_SECRET` of 32+ bytes. The app refuses to start without one.
+- **HTTPS:** serve over HTTPS. Set `COOKIE_SECURE=true`, `FRONTEND_URL` and `GOOGLE_REDIRECT_URI`, and update the redirect URI in Google Console.
+- **Real services:** point `DATABASE_URL`, `REDIS_URL`, `RABBITMQ_URL`, `SMTP_HOST`/`SMTP_PORT` and the `S3_*` settings at them.
+- **Not built yet:**
+  - Logging in to a real mail provider (SMTP username, password and TLS).
+  - Rate limiting on `/auth/login` and `/auth/register`.

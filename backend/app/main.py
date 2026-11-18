@@ -1,13 +1,15 @@
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.db import engine
 from app.core.errors import AppError, app_error_handler, validation_error_handler
+from app.core.health import router as health_router
 from app.modules.auth.router import router as auth_router
 from app.modules.channels.router import router as channels_router
 from app.modules.courses.router import router as courses_router
@@ -18,7 +20,15 @@ logging.basicConfig(
     level=logging.INFO, format="%(levelname)s:     %(name)s: %(message)s"
 )
 
-app = FastAPI(title="LearnHub Api")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    yield  # the app serves requests while we're paused here
+    # On shutdown: close the pooled database connections cleanly.
+    await engine.dispose()
+
+
+app = FastAPI(title="LearnHub Api", lifespan=lifespan)
 
 # The React app runs on another origin (port 5173), and browsers block its calls here
 # unless CORS allows them. allow_credentials lets the refresh cookie travel with those
@@ -35,14 +45,8 @@ app.add_exception_handler(RequestValidationError, validation_error_handler)
 # {"detail": ...} responses with their own status code.
 app.add_exception_handler(AppError, app_error_handler)
 
+app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(channels_router)
 app.include_router(courses_router)
-
-
-@app.get("/health")
-async def health_check() -> dict[str, str]:
-    async with engine.connect() as conn:
-        await conn.execute(text("SELECT 1"))
-    return {"status": "ok"}

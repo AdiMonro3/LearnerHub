@@ -133,4 +133,4 @@ If a reorder list doesn't match what's there now (missing, repeated or unknown i
 
 - **Banner and thumbnail images:** need uploads (Phase 3). `banner_url` and `thumbnail_url` will be added to responses then.
 - **Locking lessons to subscribers:** Phases 3–4.
-- **Rate limiting:** needs Redis (Phase 0).
+- **Rate limiting:** Redis now runs locally (Phase 0); the limits themselves are not built yet.
